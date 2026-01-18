@@ -96,4 +96,34 @@ def render(username: str, raw_text: str):
     d.text(((WIDTH - w) / 2, y), bot, USER_COLOR, f_user)
 
     path = "/tmp/post.png"
-    img.save(
+    img.save(path)
+    return path
+
+async def handle_pm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or update.message.chat.type != "private":
+        return
+
+    user = update.message.from_user
+    username = get_username(user)
+    text = update.message.text or ""
+
+    img = render(username, text)
+
+    # ⬇️ CAPTION = @username POD ZDJĘCIEM
+    await context.bot.send_photo(
+        chat_id=GROUP_ID,
+        message_thread_id=TOPIC_ID,
+        photo=open(img, "rb"),
+        caption=username
+    )
+
+    await update.message.reply_text("✅ Wysłano (naprawione + emoji).")
+
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pm))
+    print("FINAL NORMALIZED EMOJI BOT ONLINE")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
