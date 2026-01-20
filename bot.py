@@ -151,24 +151,18 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     text = msg.text or msg.caption or ""
+    header = text.strip().lower()
     user = msg.from_user
     uid = user.id
 
-    # 🚫 IGNORUJ REGULAMINY / INFO (NAWET Z #WTS)
-    IGNORED_KEYWORDS = [
-        "jak działa bot",
-        "komendy",
-        "zasady",
-        "warn",
-        "ban",
-    ]
-
-    if text.strip().startswith("🤖"):
+    # 🚫 FILTR NAGŁÓWKA (REGULAMINY / INFO)
+    if (
+        header.startswith("🤖") or
+        header.startswith("jak działa bot") or
+        header.startswith("zasady") or
+        header.startswith("komendy")
+    ):
         return
-
-    for kw in IGNORED_KEYWORDS:
-        if kw in text.lower():
-            return
 
     # ❌ BŁĘDY
     if not await is_admin(context, SOURCE_GROUP_ID, uid):
@@ -233,7 +227,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r"^/mycooldown$"), handle_mycooldown))
     app.add_handler(MessageHandler(filters.ALL, handle_group_message))
 
-    print("BOT ONLINE | FINAL | INFO SAFE")
+    print("BOT ONLINE | #WTS + HEADER FILTER | FINAL")
     app.run_polling()
 
 if __name__ == "__main__":
