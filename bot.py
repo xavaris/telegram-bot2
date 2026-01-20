@@ -13,13 +13,14 @@ import json
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-SOURCE_GROUP_ID = int(os.getenv("SOURCE_GROUP_ID"))   # grupa A
-TARGET_GROUP_ID = int(os.getenv("TARGET_GROUP_ID"))   # grupa B
-TOPIC_ID = int(os.getenv("TOPIC_ID"))                 # temat WTS
+SOURCE_GROUP_ID = int(os.getenv("SOURCE_GROUP_ID"))
+TARGET_GROUP_ID = int(os.getenv("TARGET_GROUP_ID"))
+TOPIC_ID = int(os.getenv("TOPIC_ID"))
 
-DELETE_AFTER = 12 * 60 * 60
-COOLDOWN = 12 * 60 * 60
+DELETE_AFTER = 12 * 60 * 60     # 12h
+COOLDOWN = 12 * 60 * 60         # 12h
 MAX_WARNS = 5
+INFO_DELETE_AFTER = 60          # info na SOURCE (sekundy)
 
 WARN_FILE = "warns.json"
 
@@ -202,7 +203,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if msg.text and msg.text.startswith("/"):
         return
 
-    # tylko grupa A
+    # tylko SOURCE
     if msg.chat_id != SOURCE_GROUP_ID:
         return
 
@@ -229,6 +230,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         last_post_time[uid] = now
 
+    # FORWARD
     try:
         forwarded = await context.bot.forward_message(
             chat_id=TARGET_GROUP_ID,
@@ -239,14 +241,38 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception:
         return
 
+    # PODPIS
     signature = await context.bot.send_message(
         chat_id=TARGET_GROUP_ID,
         message_thread_id=TOPIC_ID,
         text=f"— {username}"
     )
 
+    # USUŃ OGŁOSZENIE Z SOURCE NATYCHMIAST
+    try:
+        await context.bot.delete_message(
+            chat_id=SOURCE_GROUP_ID,
+            message_id=msg.message_id
+        )
+    except Exception:
+        pass
+
+    # INFO NA SOURCE
+    try:
+        info = await context.bot.send_message(
+            chat_id=SOURCE_GROUP_ID,
+            text=f"{username} twoje ogłoszenie zostało opublikowane."
+        )
+        context.job_queue.run_once(
+            delete_message_job,
+            INFO_DELETE_AFTER,
+            data={"chat_id": SOURCE_GROUP_ID, "message_id": info.message_id}
+        )
+    except Exception:
+        pass
+
+    # AUTO DELETE NA TARGET PO 12H
     for chat, mid in [
-        (SOURCE_GROUP_ID, msg.message_id),
         (TARGET_GROUP_ID, forwarded.message_id),
         (TARGET_GROUP_ID, signature.message_id),
     ]:
@@ -268,7 +294,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r"^/(warn|unwarn|warncount)$"), handle_admin_commands))
     app.add_handler(MessageHandler(filters.ALL, handle_group_message))
 
-    print("BOT ONLINE | FULL SYSTEM READY")
+    print("BOT ONLINE | FINAL VERSION")
     app.run_polling()
 
 if __name__ == "__main__":
