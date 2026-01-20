@@ -81,7 +81,7 @@ async def handle_mycooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = get_username(msg.from_user)
 
     if await is_admin(context, SOURCE_GROUP_ID, uid):
-        text = f"✅ {username} admin nie ma cooldownu"
+        text = f"✅ {username} administratorzy nie mają cooldownu"
     else:
         last = last_post_time.get(uid)
         if not last:
@@ -130,7 +130,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not msg:
         return
 
-    # 🚫 WIADOMOŚCI SYSTEMOWE / PINY / FORWARDY
+    # 🚫 systemowe / piny / forwardy
     if (
         msg.pinned_message is not None or
         msg.forward_from or
@@ -139,7 +139,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     ):
         return
 
-    # 🚫 KOMENDY
+    # 🚫 komendy
     if msg.text and msg.text.startswith("/"):
         return
 
@@ -150,9 +150,25 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not msg.from_user or msg.from_user.is_bot:
         return
 
+    text = msg.text or msg.caption or ""
     user = msg.from_user
     uid = user.id
-    text = msg.text or msg.caption or ""
+
+    # 🚫 IGNORUJ REGULAMINY / INFO (NAWET Z #WTS)
+    IGNORED_KEYWORDS = [
+        "jak działa bot",
+        "komendy",
+        "zasady",
+        "warn",
+        "ban",
+    ]
+
+    if text.strip().startswith("🤖"):
+        return
+
+    for kw in IGNORED_KEYWORDS:
+        if kw in text.lower():
+            return
 
     # ❌ BŁĘDY
     if not await is_admin(context, SOURCE_GROUP_ID, uid):
@@ -174,7 +190,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         last_post_time[uid] = time.time()
 
-    # ✅ FORWARD
+    # ✅ FORWARD OGŁOSZENIA
     forwarded = await context.bot.forward_message(
         chat_id=TARGET_GROUP_ID,
         message_thread_id=TOPIC_ID,
@@ -217,7 +233,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r"^/mycooldown$"), handle_mycooldown))
     app.add_handler(MessageHandler(filters.ALL, handle_group_message))
 
-    print("BOT ONLINE | PIN SAFE | FINAL")
+    print("BOT ONLINE | FINAL | INFO SAFE")
     app.run_polling()
 
 if __name__ == "__main__":
