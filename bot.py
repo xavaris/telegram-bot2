@@ -9,11 +9,13 @@ import os
 import time
 import json
 
+# ================== KONFIG ==================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-SOURCE_GROUP_ID = int(os.getenv("SOURCE_GROUP_ID"))
-TARGET_GROUP_ID = int(os.getenv("TARGET_GROUP_ID"))
-TOPIC_ID = int(os.getenv("TOPIC_ID"))
+SOURCE_GROUP_ID = int(os.getenv("SOURCE_GROUP_ID"))   # grupa A
+TARGET_GROUP_ID = int(os.getenv("TARGET_GROUP_ID"))   # grupa B
+TOPIC_ID = int(os.getenv("TOPIC_ID"))                 # temat WTS
 
 DELETE_AFTER = 12 * 60 * 60
 COOLDOWN = 12 * 60 * 60
@@ -21,11 +23,12 @@ MAX_WARNS = 5
 
 WARN_FILE = "warns.json"
 
-last_post_time = {}
-warns = {}
+# ================== PAMIĘĆ ==================
 
+last_post_time = {}   # cooldowny (RAM)
+warns = {}            # warny (JSON)
 
-# ---------- PERSISTENCJA ----------
+# ================== PERSISTENCJA WARNÓW ==================
 
 def load_warns():
     global warns
@@ -39,24 +42,20 @@ def load_warns():
     else:
         warns = {}
 
-
 def save_warns():
     with open(WARN_FILE, "w", encoding="utf-8") as f:
         json.dump(warns, f)
 
-
-# ---------- HELPERS ----------
+# ================== HELPERY ==================
 
 def get_username(user):
     if user.username:
         return f"@{user.username}"
     return user.first_name or "Użytkownik"
 
-
 async def is_admin(context, chat_id, user_id):
     member = await context.bot.get_chat_member(chat_id, user_id)
     return member.status in ("administrator", "creator")
-
 
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
     d = context.job.data
@@ -65,8 +64,67 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+# ================== KOMENDY USERÓW ==================
 
-# ---------- WARNS ----------
+async def handle_mywarns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg or not msg.from_user:
+        return
+
+    uid = msg.from_user.id
+    username = get_username(msg.from_user)
+    count = warns.get(uid, 0)
+
+    await context.bot.send_message(
+        chat_id=msg.chat_id,
+        reply_to_message_id=msg.message_id,
+        text=f"📊 {username}, masz {count}/{MAX_WARNS} WARNÓW"
+    )
+
+async def handle_mycooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg or not msg.from_user:
+        return
+
+    uid = msg.from_user.id
+    username = get_username(msg.from_user)
+
+    if await is_admin(context, SOURCE_GROUP_ID, uid):
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            reply_to_message_id=msg.message_id,
+            text=f"✅ {username}, administratorzy nie mają cooldownu"
+        )
+        return
+
+    last = last_post_time.get(uid)
+    if not last:
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            reply_to_message_id=msg.message_id,
+            text=f"✅ {username}, możesz wysłać ogłoszenie teraz"
+        )
+        return
+
+    remaining = int(COOLDOWN - (time.time() - last))
+    if remaining <= 0:
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            reply_to_message_id=msg.message_id,
+            text=f"✅ {username}, możesz wysłać ogłoszenie teraz"
+        )
+        return
+
+    h = remaining // 3600
+    m = (remaining % 3600) // 60
+
+    await context.bot.send_message(
+        chat_id=msg.chat_id,
+        reply_to_message_id=msg.message_id,
+        text=f"⏳ {username}, możesz wysłać kolejne ogłoszenie za {h}h {m}m"
+    )
+
+# ================== WARNS ==================
 
 async def apply_warn(context, user, reason):
     uid = user.id
@@ -76,7 +134,6 @@ async def apply_warn(context, user, reason):
     save_warns()
 
     count = warns[uid]
-
     text = f"⚠️ {username} otrzymuje WARN ({count}/{MAX_WARNS})\nPowód: {reason}"
 
     await context.bot.send_message(SOURCE_GROUP_ID, text)
@@ -84,7 +141,6 @@ async def apply_warn(context, user, reason):
 
     if count >= MAX_WARNS:
         ban_text = f"⛔ {username} otrzymał {MAX_WARNS}/{MAX_WARNS} WARNÓW → BAN"
-
         for chat in (SOURCE_GROUP_ID, TARGET_GROUP_ID):
             try:
                 await context.bot.ban_chat_member(chat, uid)
@@ -92,8 +148,7 @@ async def apply_warn(context, user, reason):
             except Exception:
                 pass
 
-
-# ---------- ADMIN PANEL ----------
+# ================== PANEL ADMINA ==================
 
 async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -131,20 +186,27 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif msg.text == "/warncount":
-        count = warns.get(uid, 0)
         await context.bot.send_message(
             chat_id,
-            f"📊 {username} ma {count}/{MAX_WARNS} WARNÓW"
+            f"📊 {username} ma {warns.get(uid, 0)}/{MAX_WARNS} WARNÓW"
         )
 
-
-# ---------- MAIN LOGIC ----------
+# ================== GŁÓWNA LOGIKA ==================
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg or msg.chat_id != SOURCE_GROUP_ID:
+    if not msg:
         return
 
+    # ❌ NIE forwarduj komend
+    if msg.text and msg.text.startswith("/"):
+        return
+
+    # tylko grupa A
+    if msg.chat_id != SOURCE_GROUP_ID:
+        return
+
+    # systemowe / boty
     if msg.from_user is None or msg.from_user.is_bot:
         return
 
@@ -194,25 +256,20 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             data={"chat_id": chat, "message_id": mid}
         )
 
-
-# ---------- START ----------
+# ================== START ==================
 
 def main():
     load_warns()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & filters.Regex(r"^/(warn|unwarn|warncount)$"),
-            handle_admin_commands
-        )
-    )
+    app.add_handler(MessageHandler(filters.Regex(r"^/mywarns$"), handle_mywarns))
+    app.add_handler(MessageHandler(filters.Regex(r"^/mycooldown$"), handle_mycooldown))
+    app.add_handler(MessageHandler(filters.Regex(r"^/(warn|unwarn|warncount)$"), handle_admin_commands))
     app.add_handler(MessageHandler(filters.ALL, handle_group_message))
 
-    print("BOT ONLINE | WARNY ZAPISYWANE DO PLIKU")
+    print("BOT ONLINE | FULL SYSTEM READY")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
