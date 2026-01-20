@@ -82,11 +82,13 @@ async def handle_mywarns(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=f"📊 {username}, masz {count}/{MAX_WARNS} WARNÓW"
     )
 
-    context.job_queue.run_once(
-        delete_message_job,
-        SOURCE_DELETE_AFTER,
-        data={"chat_id": msg.chat_id, "message_id": reply.message_id}
-    )
+    # usuń odpowiedź i KOMENDĘ usera po 120s
+    for mid in (reply.message_id, msg.message_id):
+        context.job_queue.run_once(
+            delete_message_job,
+            SOURCE_DELETE_AFTER,
+            data={"chat_id": msg.chat_id, "message_id": mid}
+        )
 
 async def handle_mycooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -127,11 +129,13 @@ async def handle_mycooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=f"⏳ {username}, możesz wysłać kolejne ogłoszenie za {h}h {m}m"
                 )
 
-    context.job_queue.run_once(
-        delete_message_job,
-        SOURCE_DELETE_AFTER,
-        data={"chat_id": msg.chat_id, "message_id": reply.message_id}
-    )
+    # usuń odpowiedź i KOMENDĘ usera po 120s
+    for mid in (reply.message_id, msg.message_id):
+        context.job_queue.run_once(
+            delete_message_job,
+            SOURCE_DELETE_AFTER,
+            data={"chat_id": msg.chat_id, "message_id": mid}
+        )
 
 # ================== WARNS ==================
 
@@ -217,7 +221,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not msg:
         return
 
-    # ❌ NIGDY nie ruszaj PINÓW
+    # ❌ PINY – NIGDY
     if msg.pinned_message is not None:
         return
 
@@ -237,18 +241,30 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     username = get_username(user)
     text = msg.text or msg.caption or ""
 
+    # ===== BŁĘDY → WARN + USUNIĘCIE PO 120s =====
     if not await is_admin(context, SOURCE_GROUP_ID, uid):
         if "#wts" not in text.lower():
+            context.job_queue.run_once(
+                delete_message_job,
+                SOURCE_DELETE_AFTER,
+                data={"chat_id": SOURCE_GROUP_ID, "message_id": msg.message_id}
+            )
             await apply_warn(context, user, "Brak #wts")
             return
 
         now = time.time()
         if now - last_post_time.get(uid, 0) < COOLDOWN:
+            context.job_queue.run_once(
+                delete_message_job,
+                SOURCE_DELETE_AFTER,
+                data={"chat_id": SOURCE_GROUP_ID, "message_id": msg.message_id}
+            )
             await apply_warn(context, user, "Złamanie cooldownu 12h")
             return
 
         last_post_time[uid] = now
 
+    # ===== POPRAWNE OGŁOSZENIE =====
     try:
         forwarded = await context.bot.forward_message(
             chat_id=TARGET_GROUP_ID,
@@ -265,7 +281,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         message_thread_id=TOPIC_ID
     )
 
-    # usuń ogłoszenie z SOURCE
+    # SOURCE – USUŃ NATYCHMIAST
     try:
         await context.bot.delete_message(SOURCE_GROUP_ID, msg.message_id)
     except Exception:
@@ -275,13 +291,13 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         SOURCE_GROUP_ID,
         text=f"{username} twoje ogłoszenie zostało opublikowane."
     )
-
     context.job_queue.run_once(
         delete_message_job,
         SOURCE_DELETE_AFTER,
         data={"chat_id": SOURCE_GROUP_ID, "message_id": info.message_id}
     )
 
+    # TARGET – USUŃ PO 12h
     for mid in (forwarded.message_id, signature.message_id):
         context.job_queue.run_once(
             delete_message_job,
@@ -300,7 +316,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r"^/(warn|unwarn|warncount)$"), handle_admin_commands))
     app.add_handler(MessageHandler(filters.ALL, handle_group_message))
 
-    print("BOT ONLINE | PIN SAFE | SOURCE 120s | TARGET 12h")
+    print("BOT ONLINE | FINAL FIXED VERSION")
     app.run_polling()
 
 if __name__ == "__main__":
