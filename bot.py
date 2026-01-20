@@ -7,19 +7,42 @@ from telegram.ext import (
 )
 import os
 import time
+import json
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-SOURCE_GROUP_ID = int(os.getenv("SOURCE_GROUP_ID"))   # grupa A
-TARGET_GROUP_ID = int(os.getenv("TARGET_GROUP_ID"))   # grupa B
-TOPIC_ID = int(os.getenv("TOPIC_ID"))                 # temat w grupie B
+SOURCE_GROUP_ID = int(os.getenv("SOURCE_GROUP_ID"))
+TARGET_GROUP_ID = int(os.getenv("TARGET_GROUP_ID"))
+TOPIC_ID = int(os.getenv("TOPIC_ID"))
 
-DELETE_AFTER = 12 * 60 * 60   # 12h
-COOLDOWN = 12 * 60 * 60       # 12h
+DELETE_AFTER = 12 * 60 * 60
+COOLDOWN = 12 * 60 * 60
 MAX_WARNS = 5
 
-last_post_time = {}  # user_id -> timestamp
-warns = {}           # user_id -> warn count
+WARN_FILE = "warns.json"
+
+last_post_time = {}
+warns = {}
+
+
+# ---------- PERSISTENCJA ----------
+
+def load_warns():
+    global warns
+    if os.path.exists(WARN_FILE):
+        try:
+            with open(WARN_FILE, "r", encoding="utf-8") as f:
+                warns = json.load(f)
+                warns = {int(k): int(v) for k, v in warns.items()}
+        except Exception:
+            warns = {}
+    else:
+        warns = {}
+
+
+def save_warns():
+    with open(WARN_FILE, "w", encoding="utf-8") as f:
+        json.dump(warns, f)
 
 
 # ---------- HELPERS ----------
@@ -50,32 +73,34 @@ async def apply_warn(context, user, reason):
     username = get_username(user)
 
     warns[uid] = warns.get(uid, 0) + 1
+    save_warns()
+
     count = warns[uid]
 
-    warn_text = f"⚠️ {username} otrzymuje WARN ({count}/{MAX_WARNS})\nPowód: {reason}"
+    text = f"⚠️ {username} otrzymuje WARN ({count}/{MAX_WARNS})\nPowód: {reason}"
 
-    await context.bot.send_message(SOURCE_GROUP_ID, warn_text)
-    await context.bot.send_message(TARGET_GROUP_ID, warn_text)
+    await context.bot.send_message(SOURCE_GROUP_ID, text)
+    await context.bot.send_message(TARGET_GROUP_ID, text)
 
     if count >= MAX_WARNS:
         ban_text = f"⛔ {username} otrzymał {MAX_WARNS}/{MAX_WARNS} WARNÓW → BAN"
 
-        for chat_id in (SOURCE_GROUP_ID, TARGET_GROUP_ID):
+        for chat in (SOURCE_GROUP_ID, TARGET_GROUP_ID):
             try:
-                await context.bot.ban_chat_member(chat_id, uid)
-                await context.bot.send_message(chat_id, ban_text)
+                await context.bot.ban_chat_member(chat, uid)
+                await context.bot.send_message(chat, ban_text)
             except Exception:
                 pass
 
 
-# ---------- ADMIN COMMANDS ----------
+# ---------- ADMIN PANEL ----------
 
 async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or not msg.reply_to_message:
         return
 
-    if msg.text not in ("/warn", "/unwarn", "/warns"):
+    if msg.text not in ("/warn", "/unwarn", "/warncount"):
         return
 
     chat_id = msg.chat_id
@@ -89,7 +114,7 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if await is_admin(context, chat_id, target.id):
-        return  # adminów nie warnujemy
+        return
 
     uid = target.id
     username = get_username(target)
@@ -99,12 +124,13 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif msg.text == "/unwarn":
         warns[uid] = max(0, warns.get(uid, 0) - 1)
+        save_warns()
         await context.bot.send_message(
             chat_id,
             f"✅ {username} zdjęto WARN ({warns[uid]}/{MAX_WARNS})"
         )
 
-    elif msg.text == "/warns":
+    elif msg.text == "/warncount":
         count = warns.get(uid, 0)
         await context.bot.send_message(
             chat_id,
@@ -116,14 +142,9 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg:
+    if not msg or msg.chat_id != SOURCE_GROUP_ID:
         return
 
-    # tylko grupa A
-    if msg.chat_id != SOURCE_GROUP_ID:
-        return
-
-    # systemowe / boty
     if msg.from_user is None or msg.from_user.is_bot:
         return
 
@@ -132,25 +153,20 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     username = get_username(user)
     text = msg.text or msg.caption or ""
 
-    # ADMIN BYPASS
     if not await is_admin(context, SOURCE_GROUP_ID, uid):
 
-        # brak #wts
         if "#wts" not in text.lower():
             await apply_warn(context, user, "Brak #wts")
             return
 
-        # cooldown
         now = time.time()
         last = last_post_time.get(uid, 0)
-
         if now - last < COOLDOWN:
             await apply_warn(context, user, "Złamanie cooldownu 12h")
             return
 
         last_post_time[uid] = now
 
-    # FORWARD 1:1
     try:
         forwarded = await context.bot.forward_message(
             chat_id=TARGET_GROUP_ID,
@@ -161,14 +177,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception:
         return
 
-    # PODPIS
     signature = await context.bot.send_message(
         chat_id=TARGET_GROUP_ID,
         message_thread_id=TOPIC_ID,
         text=f"— {username}"
     )
 
-    # AUTO DELETE 12H
     for chat, mid in [
         (SOURCE_GROUP_ID, msg.message_id),
         (TARGET_GROUP_ID, forwarded.message_id),
@@ -184,12 +198,19 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 # ---------- START ----------
 
 def main():
+    load_warns()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/(warn|unwarn|warns)$"), handle_admin_commands))
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & filters.Regex(r"^/(warn|unwarn|warncount)$"),
+            handle_admin_commands
+        )
+    )
     app.add_handler(MessageHandler(filters.ALL, handle_group_message))
 
-    print("BOT ONLINE | WTS | WARN | BAN | COOLDOWN | AUTO DELETE")
+    print("BOT ONLINE | WARNY ZAPISYWANE DO PLIKU")
     app.run_polling()
 
 
